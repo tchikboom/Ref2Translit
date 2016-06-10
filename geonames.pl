@@ -10,7 +10,6 @@ use XML::Simple ;
 
 # Récupère la requête de l'utilisateur
 print "Entrer un lieu à chercher :\n" ;
-binmode(STDIN, ":utf8") ;
 chomp(my $req = <STDIN>) ;
 if ($req eq ''){die "Vous n'avez pas entré de lieu à chercher. Veuillez recommencer.\n"};
 # Minusculisation de la requête pour faciliter son traitement ultérieur
@@ -38,6 +37,7 @@ my $parser = $xml->XMLin("req_output.xml") ;
 open(XML,'>','geonames_output.xml') ;
 binmode(XML, ":utf8") ;
 print XML '<?xml version="1.0" encoding="UTF-8"?>'."\n" ;
+print XML "<translit>\n" ;
 
 # Variable pour vérifier si le nom a bien été trouvé
 my $check = 0 ;
@@ -45,6 +45,7 @@ my $check = 0 ;
 # Pour chaque lieu trouvé par Geonames
 foreach my $place_name (@{$parser->{'gn:Feature'}})
 {
+	print "Lieu cherché :".$place_name->{'gn:name'}."\n" ;
 	# Pour chaque nom officiel du lieu
 	foreach my $off_name (@{$place_name->{'gn:officialName'}})
 	{
@@ -53,7 +54,7 @@ foreach my $place_name (@{$parser->{'gn:Feature'}})
 			lc($off_name->{content}) eq $req)
 		{
 			# Impression dans le fichier d'output du nom français repéré
-			print XML "<placename=\'".$off_name->{content}."\'>\n" ;
+			print XML "\t<entite id=\"".$off_name->{content}."\">\n" ;
 			# On change la valeur de la variable $check pour signaler qu'on a trouvé le lieu correspondant à la requête
 			$check = 1 ;
 			print $off_name->{content}." a été trouvé(e).\n" ;
@@ -68,10 +69,10 @@ foreach my $place_name (@{$parser->{'gn:Feature'}})
 		{
 			# Si le nom officiel français est identique à la requête
 			if ($alt_name->{'xml:lang'} eq 'fr' &&
-			lc($alt_name->{content}) eq $req)
+				lc($alt_name->{content}) eq $req)
 			{
 				# Impression dans le fichier d'output du nom français repéré
-				print XML "<item=\'".$alt_name->{content}."\'>\n" ;
+				print XML "<entite id=\"".$alt_name->{content}."\">\n" ;
 				# On change la valeur de la variable $check pour signaler qu'on a trouvé le lieu correspondant à la requête
 				$check = 1 ;
 				print $alt_name->{content}." a été trouvé(e).\n" ;
@@ -79,8 +80,8 @@ foreach my $place_name (@{$parser->{'gn:Feature'}})
 			}
 		}
 	}
-	# Si $check =! 0, alors le lieu a été repéré
-	else
+	# Si $check == 1, alors le lieu a été repéré
+	if ($check == 1)
 	{
 		# On recommence la boucle sur chaque nom officiel
 		foreach my $off_name2 (@{$place_name->{'gn:officialName'}})
@@ -89,7 +90,7 @@ foreach my $place_name (@{$parser->{'gn:Feature'}})
 			if ($off_name2->{'xml:lang'} ne 'fr')
 			{
 				# Impression de la langue et de la translitération
-				print XML "\t<lang=\'".$off_name2->{'xml:lang'}."\'>".$off_name2->{content}."</lang>\n" ;
+				print XML "\t\t<forme source=\"Geonames\" langue=\"".$off_name2->{'xml:lang'}."\">".$off_name2->{content}."</lang>\n" ;
 			}
 		}
 		# On recommence la boucle sur chaque nom alternatif
@@ -99,12 +100,17 @@ foreach my $place_name (@{$parser->{'gn:Feature'}})
 			if ($alt_name2->{'xml:lang'} ne 'fr')
 			{
 				# Impression de la langue et de la translitération
-				print XML "\t<lang=\'".$alt_name2->{'xml:lang'}."\'>".$alt_name2->{content}."</lang>\n" ;
+				print XML "\t\t<forme source=\"Geonames\" langue =\"".$alt_name2->{'xml:lang'}."\">".$alt_name2->{content}."</lang>\n" ;
 			}
 		}
-		print XML "</placename>";
+		print XML "\t</entite>\n";
 		last ;
 	}
 }
+if ($check == 0)
+{
+	print "L'entité n'a pas été trouvée. Veuillez recommencer ou mettre à jour Geonames.\n"
+}
 
+print XML "</translit>" ;
 close XML ;
