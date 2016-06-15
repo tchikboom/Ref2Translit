@@ -14,6 +14,7 @@ my $query = RDF::Query::Client->new('select count(*) as ?count where {?entite ow
 my $iterator = $query->execute('http://fr.dbpedia.org/sparql');
 my $tripletsMax = $iterator->next->{count}->as_string;
 $tripletsMax =~ s/[^0-9]*([0-9]*)[^0-9]+.*/$1/g;
+# $tripletsMax = 5000;
 print "Nombre de triplets trouvés : $tripletsMax\n";
 
 
@@ -41,6 +42,7 @@ while ($offset < $tripletsMax) {
 		my $entite;
 		if ($entiteURI =~ /http:\/\/fr.dbpedia.org\/resource\/(.+)>/) {
 			$entite = $1;
+			$entite =~ s/_/ /g;
 		}
 		else {
 			print EXCFR "$entiteURI\tOFFSET = $offset\n";
@@ -58,7 +60,13 @@ while ($offset < $tripletsMax) {
 			else {
 				$langue =~ s/\.dbpedia\.org//
 			}
-			$nomInternational = $2;
+			if ($langue ne "fr") {
+				$nomInternational = $2;
+			}
+			else {
+				$nomInternational = $entite;
+			}
+			$nomInternational =~ s/_/ /g;
 			$languages{$langue} = $offset;
 			$translit{$entite}{$langue} = $nomInternational;
 		}
