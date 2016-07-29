@@ -1,4 +1,4 @@
-# Ref2Translit
+# Referentiels2Thesaurus
 Ensemble de scripts qui permettent d'extraire le contenu de différents référentiels pour obtenir les translittérations de différents termes dans un fichier XML au format SKOS.
 
 ## Synopsis
@@ -30,6 +30,9 @@ Pour le bon fonctionnement des scripts, il faut installer les modules suivants, 
 ## Référentiels utilisés
 
 DBpedia : Tout type d'entités, référentiel de Wikipédia
+
 VIAF : Références bibliothécaires 
+
 Geonames : Noms de lieux
+
 The Movie Database : Noms de films
