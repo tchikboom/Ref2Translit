@@ -3,114 +3,160 @@
 use strict ;
 use warnings ;
 
+use utf8 ;
+use Term::ProgressBar ;
 use LWP::Simple ;
-use XML::Simple ;
+use Archive::Extract ;
 
-# Extraction des translitérations proposées par Geonames
+binmode(STDIN, ":utf8") ;
+binmode(STDOUT, ":utf8") ;
 
-# Récupère la requête de l'utilisateur
-print "Entrer un lieu à chercher :\n" ;
-chomp(my $req = <STDIN>) ;
-if ($req eq ''){die "Vous n'avez pas entré de lieu à chercher. Veuillez recommencer.\n"};
-# Minusculisation de la requête pour faciliter son traitement ultérieur
-$req = lc($req) ;
+# Téléchargement du dump des noms alternatifs de Geonames
+print "Téléchargement du dump des noms alternatifs de Geonames...\n" ;
+my $url = "http://download.geonames.org/export/dump/alternateNames.zip" ;
+my $zipname = "alternatenames.zip" ;
+getstore($url, $zipname) ;
+print "Téléchargement terminé.\n" ;
+# Dézippage du fichier téléchargé
+print "Extraction du fichier...\n" ;
+my $unzip = Archive::Extract->new(archive => $zipname);
+$unzip -> extract ;
+print "Fichier extrait.\n" ;
 
-# Effectue une requête HTML en fonction de l'input de l'utilisateur, et l'enregistre dans un fichier XML
-# On demande 5 résultats pour éviter les cas où le lieu demandé n'est pas le premier trouvé par Geonames
-my $url = "http://api.geonames.org/search?q=$req&maxRows=5&type=rdf&username=tchikboom";
-open(REQ,'>','req_output.xml') ;
-binmode(REQ, ":utf8") ;
-print REQ get($url) ;
-close REQ ;
+# Lecture du fichier dézippé
+open(my $file_cpt, '<', 'alternateNames.txt')
+or die ("Le fichier alternateNames.txt n'a pas pu être ouvert.\n") ;
 
-# Création d'un parser XML à partir de l'output de la requête
-my $xml = new XML::Simple ;
-my $parser = $xml->XMLin("req_output.xml") ;
+# On trouve le nombre de lignes du fichier pour la barre de chargement
+my $nblignes = 0 ;
+$nblignes += tr/\n/\n/ while sysread($file_cpt, $_, 2 ** 16) ;
+close $file_cpt ;
 
-# Exemple résumé de structure XML du document :
-# <gn:Feature>
-# 	<gn:officialName xml:lang = "fr">Londres<gn:officialName>
-#	<gn:alternateName xml:lang="ba">Лондон</gn:alternateName>
-# </gn:Feature>
+# Réouverture du fichier alternateNames.txt, just because
+open(my $file, '<', 'alternateNames.txt')
+or die ("Le fichier alternateNames.txt n'a pas pu être ouvert.\n") ;
 
-# Ouverture du fichier d'output final
-open(XML,'>','geonames_output.xml') ;
-binmode(XML, ":utf8") ;
+# Structure de données où seront enregistrés chaque translittération
+my %results = () ;
+
+# Création d'une barre de progression
+print "Parsing du fichier...\n" ;
+my $start = time() ;
+my $progress_parse = Term::ProgressBar->new($nblignes) ;
+my $cpt = 0 ;
+my $cpt_true = 0;
+
+while (my $ligne = <$file>)
+{
+	chomp($ligne) ;
+	my $id = $ligne ;
+	my $lang = $ligne ;
+	my $name = $ligne ;
+
+	$lang =~ s/[0-9]+\t[0-9]+\t([a-z]*)\t.+/$1/ ;
+	# Nettoyage des translittérations non pertinentes
+	if ($lang eq '' ||
+		$lang eq 'link' ||
+		$lang eq 'post' ||
+		$lang eq 'iata' ||
+		$lang eq 'icao' ||
+		$lang eq 'new')
+	{
+		$progress_parse->update($cpt) ;
+		$cpt++ ;
+		next ;
+	}
+	$id =~ s/[0-9]+\t([0-9]+)\t[a-z]*\t.+/$1/ ;
+	$name =~ s/[0-9]+\t[0-9]+\t[a-z]*\t(.+)\t+/$1/ ;
+	$name =~ s/\t+// ;
+	# Stocke les résultats dans un hash (entités) de hashs (langues) de listes (translittérations)
+	push @{$results{$id}{$lang}}, $name ;
+	$progress_parse->update($cpt) ;
+	$cpt++ ;
+	$cpt_true++ ;
+}
+$progress_parse->update($cpt) ;
+
+# Création d'une table nettoyée
+my %clean = () ;
+my $languniq = 0 ;
+my $transuniq = 0 ;
+
+foreach my $entite (keys %results)
+{
+	if (scalar keys %{$results{$entite}} < 2)
+	{
+		$languniq = 1 ;
+	}
+	foreach my $langue (keys %{$results{$entite}})
+	{
+		if (scalar @{$results{$entite}{$langue}} < 2)
+		{
+			$transuniq = 1 ;
+		}
+		if ($languniq == 1 && $transuniq == 1)
+		{
+			next ;
+			$transuniq = 0 ;
+		}
+		else
+		{
+			foreach my $translit (@{$results{$entite}{$langue}})
+			{
+				push @{$clean{$entite}{$langue}}, $translit ;
+				$transuniq = 0 ;
+			}
+		}
+	}
+	$languniq = 0 ;
+}
+
+# Ouverture du fichier d'output
+open (XML, '>', 'geonames_output.xml')
+or die ("geonames_output.xml n'a pas pu être ouvert.\n") ;
 print XML '<?xml version="1.0" encoding="UTF-8"?>'."\n" ;
-print XML "<translit>\n" ;
+print XML '<rdf:RDF xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'."\n" ;
 
-# Variable pour vérifier si le nom a bien été trouvé
-my $check = 0 ;
+print "\nImpression des résultats...\n" ;
+my $progress_write = Term::ProgressBar->new($cpt_true) ;
+my $cpt2 = 0 ;
 
-# Pour chaque lieu trouvé par Geonames
-foreach my $place_name (@{$parser->{'gn:Feature'}})
+my %verif = () ;
+# Pour chaque entité
+foreach my $entite_clean (sort keys %clean)
 {
-	print "Lieu cherché :".$place_name->{'gn:name'}."\n" ;
-	# Pour chaque nom officiel du lieu
-	foreach my $off_name (@{$place_name->{'gn:officialName'}})
+	print XML "\t<skos:Concept rdf:about=\"".$entite_clean."\">\n" ;
+	# Pour chaque langue de l'entités
+	foreach my $langue_clean (sort keys %{$clean{$entite_clean}})
 	{
-		# Si le nom officiel français est identique à la requête
-		if ($off_name->{'xml:lang'} eq 'fr' &&
-			lc($off_name->{content}) eq $req)
+		# Pour chaque translittération dans chaque langue de l'entité
+		foreach my $translit_clean (@{$clean{$entite_clean}{$langue_clean}})
 		{
-			# Impression dans le fichier d'output du nom français repéré
-			print XML "\t<entite id=\"".$off_name->{content}."\">\n" ;
-			# On change la valeur de la variable $check pour signaler qu'on a trouvé le lieu correspondant à la requête
-			$check = 1 ;
-			print $off_name->{content}." a été trouvé(e).\n" ;
-			last ;
-		}
-	}
-	# Si le lieu n'a pas été trouvé dans les noms officiels (qui sont facultatifs)
-	if ($check == 0)
-	{
-		# Pour chaque nom alternatif du lieu
-		foreach my $alt_name (@{$place_name->{'gn:alternateName'}})
-		{
-			# Si le nom officiel français est identique à la requête
-			if ($alt_name->{'xml:lang'} eq 'fr' &&
-				lc($alt_name->{content}) eq $req)
+			if (exists $verif{$langue_clean})
 			{
-				# Impression dans le fichier d'output du nom français repéré
-				print XML "<entite id=\"".$alt_name->{content}."\">\n" ;
-				# On change la valeur de la variable $check pour signaler qu'on a trouvé le lieu correspondant à la requête
-				$check = 1 ;
-				print $alt_name->{content}." a été trouvé(e).\n" ;
-				last ;
+				print XML "\t\t<skos:altLabel xml:lang=\"".$langue_clean."\">".$translit_clean."</skos:altLabel>\n" ;
+				$progress_write->update($cpt2) ;
+				$cpt2++ ;
+			}
+			else
+			{
+				$verif{$langue_clean} = 1 ;
+				print XML "\t\t<skos:prefLabel xml:lang=\"".$langue_clean."\">".$translit_clean."</skos:prefLabel>\n" ;
+				$progress_write->update($cpt2) ;
+				$cpt2++ ;
 			}
 		}
 	}
-	# Si $check == 1, alors le lieu a été repéré
-	if ($check == 1)
-	{
-		# On recommence la boucle sur chaque nom officiel
-		foreach my $off_name2 (@{$place_name->{'gn:officialName'}})
-		{
-			# Si la langue du nom est différente du français (déjà indiqué dans le fichier XML)
-			if ($off_name2->{'xml:lang'} ne 'fr')
-			{
-				# Impression de la langue et de la translitération
-				print XML "\t\t<forme source=\"Geonames\" langue=\"".$off_name2->{'xml:lang'}."\">".$off_name2->{content}."</lang>\n" ;
-			}
-		}
-		# On recommence la boucle sur chaque nom alternatif
-		foreach my $alt_name2 (@{$place_name->{'gn:alternateName'}})
-		{
-			# Si la langue du nom est différente du français, déjà indiqué dans le fichier XML
-			if ($alt_name2->{'xml:lang'} ne 'fr')
-			{
-				# Impression de la langue et de la translitération
-				print XML "\t\t<forme source=\"Geonames\" langue =\"".$alt_name2->{'xml:lang'}."\">".$alt_name2->{content}."</lang>\n" ;
-			}
-		}
-		print XML "\t</entite>\n";
-		last ;
-	}
+	print XML "\t</skos:Concept>\n" ;
+	%verif = () ;
 }
-if ($check == 0)
-{
-	print "L'entité n'a pas été trouvée. Veuillez recommencer ou mettre à jour Geonames.\n"
-}
-
-print XML "</translit>" ;
+print XML "</rdf:RDF>\n" ;
 close XML ;
+$progress_write->update($cpt2) ;
+
+my $end = time() ;
+my $elapsed = $end-$start ;
+my $minutes = $elapsed / 60 ;
+
+print "\nTemps écoulé : ".$minutes." minutes.\n" ;
